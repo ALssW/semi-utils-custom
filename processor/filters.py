@@ -6,6 +6,7 @@ from typing import Tuple
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
+from core.logger import logger
 from core.util import get_exif
 from processor.core import ImageProcessor, PipelineContext, start_process, get_processor
 from processor.types import Alignment
@@ -246,6 +247,41 @@ class MarginWithRatioFilter(FilterProcessor):
 
 class WatermarkFilter(FilterProcessor):
     @staticmethod
+    def _as_bool(value, default: bool = False) -> bool:
+        """
+        将配置值解析为布尔。
+        :param value: 原始配置
+        :param default: 缺省值
+        :return: 布尔结果
+        """
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _parse_opacity(value, default: int = 255) -> int:
+        """
+        解析不透明度。支持 0-255、0-1 小数、百分比字符串。
+        :param value: 原始配置
+        :param default: 缺省不透明度
+        :return: 0-255 的 alpha
+        """
+        if value is None or value == "":
+            return default
+        if isinstance(value, str):
+            raw = value.strip()
+            if raw.endswith("%"):
+                return int(np.clip(float(raw[:-1]) / 100.0 * 255.0, 0, 255))
+            value = float(raw)
+        if isinstance(value, float) and 0.0 <= value <= 1.0:
+            return int(np.clip(round(value * 255.0), 0, 255))
+        return int(np.clip(int(value), 0, 255))
+
+    @staticmethod
     def _paste(canvas: Image.Image, layer: Image.Image, xy: tuple, with_shadow: bool = False):
         """粘贴图层；overlay 模式下加轻微阴影，避免浅色背景上看不清。"""
         if layer is None or layer.width == 0 or layer.height == 0:
@@ -262,6 +298,80 @@ class WatermarkFilter(FilterProcessor):
     @staticmethod
     def _empty_image():
         return Image.new("RGBA", (0, 0), (0, 0, 0, 0))
+
+    @staticmethod
+    def _layer_ink_alpha(img: Image.Image) -> Image.Image:
+        """
+        从 logo 提取墨迹 alpha：浅色 logo 用亮度，深色 logo 取反，再乘原 alpha。
+        :param img: 带透明通道的图层
+        :return: L 模式遮罩
+        """
+        arr = np.array(img.convert("RGBA"))
+        rgb = arr[:, :, :3].astype(np.float32)
+        a = arr[:, :, 3].astype(np.float32) / 255.0
+        lum = rgb.mean(axis=2) / 255.0
+        visible = a > 0.08
+        if np.any(visible):
+            mean_lum = float(lum[visible].mean())
+            ink = lum if mean_lum >= 0.5 else (1.0 - lum)
+        else:
+            ink = np.ones_like(lum)
+        new_a = np.clip(a * ink * 255.0, 0, 255).astype(np.uint8)
+        return Image.fromarray(new_a, mode="L")
+
+    @staticmethod
+    def _colorize_layer(img: Image.Image, rgba: tuple, is_logo: bool = False) -> Image.Image:
+        """
+        保留字形/logo 形状，填充指定 RGBA 颜色。
+        :param img: 原图层
+        :param rgba: 目标 (r,g,b,a)
+        :param is_logo: 是否按 logo 墨迹提取遮罩
+        :return: 着色后的图层
+        """
+        if img is None or img.width == 0 or img.height == 0:
+            return img
+        img = img.convert("RGBA")
+        tr, tg, tb, ta = rgba
+        alpha = WatermarkFilter._layer_ink_alpha(img) if is_logo else img.getchannel("A")
+        if ta < 255:
+            alpha = alpha.point(lambda p, t=ta: int(p * t / 255))
+        out = Image.new("RGBA", img.size, (tr, tg, tb, 0))
+        out.putalpha(alpha)
+        return out
+
+    @staticmethod
+    def _apply_opacity(img: Image.Image, opacity: int) -> Image.Image:
+        """
+        按全局不透明度缩放图层 alpha。
+        :param img: 原图层
+        :param opacity: 0-255
+        :return: 调整后的图层
+        """
+        if img is None or img.width == 0 or img.height == 0 or opacity >= 255:
+            return img
+        img = img.convert("RGBA")
+        alpha = img.getchannel("A").point(lambda p, o=opacity: int(p * o / 255))
+        img.putalpha(alpha)
+        return img
+
+    @staticmethod
+    def _region_luminance(canvas: Image.Image, box: tuple) -> float:
+        """
+        计算画布指定区域的平均亮度（0-255，Rec.709）。
+        :param canvas: 背景图
+        :param box: (x0, y0, x1, y1)
+        :return: 平均亮度
+        """
+        x0, y0, x1, y1 = box
+        x0 = int(max(0, min(canvas.width, x0)))
+        x1 = int(max(0, min(canvas.width, x1)))
+        y0 = int(max(0, min(canvas.height, y0)))
+        y1 = int(max(0, min(canvas.height, y1)))
+        if x1 <= x0 or y1 <= y0:
+            return 0.0
+        crop = np.array(canvas.crop((x0, y0, x1, y1)).convert("RGB"), dtype=np.float32)
+        y = 0.2126 * crop[:, :, 0] + 0.7152 * crop[:, :, 1] + 0.0722 * crop[:, :, 2]
+        return float(y.mean())
 
     def _render_text_slot(self, cfg, default_text_height: int):
         if not cfg:
@@ -287,6 +397,9 @@ class WatermarkFilter(FilterProcessor):
             overlay = bool(overlay_raw)
         color = ctx.get("color", "white")
         delimiter_color = ctx.getcolor("delimiter_color", (0, 0, 0, 255))
+        auto_color = self._as_bool(ctx.get("auto_color"), overlay)
+        opacity = self._parse_opacity(ctx.get("opacity"), delimiter_color[3] if auto_color else 255)
+        auto_color_threshold = ctx.getint("auto_color_threshold", 128)
         delimiter_width = ctx.getint("delimiter_width", int(img.width * (.002 if overlay else .003)))
         right_alignment = ctx.getenum("right_alignment", Alignment.RIGHT, Alignment)
         # block_align: left|right —— logo+左侧文本块整体靠左或靠右
@@ -354,6 +467,9 @@ class WatermarkFilter(FilterProcessor):
             elem_margin = int((bottom_margin - elem_height) / 2)
             content_top_y = footer_start_y + elem_margin
 
+        paste_items = []  # (layer, x, y, is_logo)
+
+        center_x = center_y = None
         if center_logo:
             logo_height = center_logo_height if center_logo_height else (elem_height if overlay else canvas_height - footer_start_y)
             resize_ctx = PipelineContext({
@@ -367,18 +483,18 @@ class WatermarkFilter(FilterProcessor):
                 center_y = content_top_y + (elem_height - center_logo.height) // 2
             else:
                 center_y = footer_start_y + ((canvas.height - footer_start_y) - center_logo.height) // 2
-            self._paste(canvas, center_logo, (center_x, center_y), with_shadow=overlay)
+            paste_items.append((center_logo, center_x, center_y, True))
 
         # 左侧文本块宽度（左对齐）
         text_block_width = max(left_top.width, left_middle.width, left_bottom.width, 0)
 
         # 预缩放 logo，计算整块宽度
         logo_block_width = 0
-        delimiter = None
+        left_delimiter = None
         if left_logo:
             left_logo = self._resize_keep_ratio(left_logo, elem_height)
-            delimiter = Image.new("RGBA", (delimiter_width, int(elem_height * 1.1)), delimiter_color)
-            logo_block_width = left_logo.width + common_spacing + delimiter.width + common_spacing
+            left_delimiter = Image.new("RGBA", (delimiter_width, int(elem_height * 1.1)), delimiter_color)
+            logo_block_width = left_logo.width + common_spacing + left_delimiter.width + common_spacing
 
         total_left_block_width = logo_block_width + text_block_width
 
@@ -392,13 +508,13 @@ class WatermarkFilter(FilterProcessor):
         if left_logo:
             left_logo_x = block_left
             left_logo_y = content_top_y + (elem_height - left_logo.height) // 2
-            self._paste(canvas, left_logo, (left_logo_x, left_logo_y), with_shadow=overlay)
+            paste_items.append((left_logo, left_logo_x, left_logo_y, True))
 
             delimiter_x = left_logo_x + left_logo.width + common_spacing
             delimiter_y = int(content_top_y - elem_height * .05)
-            self._paste(canvas, delimiter, (delimiter_x, delimiter_y), with_shadow=overlay)
+            paste_items.append((left_delimiter, delimiter_x, delimiter_y, False))
 
-            l_x = delimiter_x + delimiter.width + common_spacing
+            l_x = delimiter_x + left_delimiter.width + common_spacing
 
         # 左侧三行：自上而下 left_top / left_middle / left_bottom，整体贴底
         y = canvas_height - elem_margin
@@ -416,6 +532,7 @@ class WatermarkFilter(FilterProcessor):
             lt_y = lm_y
 
         right_content_end_x = canvas_width - right_margin
+        rt_x = rb_x = rt_y = rb_y = 0
         if right_bottom.height > 0 or right_top.height > 0:
             rb_y = canvas_height - elem_margin - right_bottom.height
             rt_y = rb_y - (middle_spacing + right_top.height if right_top.height > 0 else 0)
@@ -427,25 +544,55 @@ class WatermarkFilter(FilterProcessor):
             rb_x = right_content_end_x - right_bottom.width - common_spacing
             if Alignment.LEFT == right_alignment:
                 rt_x = rb_x = min(rt_x, rb_x)
-            self._paste(canvas, right_top, (rt_x, rt_y), with_shadow=overlay)
-            self._paste(canvas, right_bottom, (rb_x, rb_y), with_shadow=overlay)
+            paste_items.append((right_top, rt_x, rt_y, False))
+            paste_items.append((right_bottom, rb_x, rb_y, False))
 
-        self._paste(canvas, left_top, (l_x, lt_y), with_shadow=overlay)
+        paste_items.append((left_top, l_x, lt_y, False))
         if left_middle.height > 0:
-            self._paste(canvas, left_middle, (l_x, lm_y), with_shadow=overlay)
-        self._paste(canvas, left_bottom, (l_x, lb_y), with_shadow=overlay)
+            paste_items.append((left_middle, l_x, lm_y, False))
+        paste_items.append((left_bottom, l_x, lb_y, False))
 
         if right_logo and (right_top.height > 0 or right_bottom.height > 0):
             right_logo = self._resize_keep_ratio(right_logo, elem_height)
-            delimiter = Image.new("RGBA", (delimiter_width, int(elem_height * 1.1)), delimiter_color)
+            right_delimiter = Image.new("RGBA", (delimiter_width, int(elem_height * 1.1)), delimiter_color)
             delimiter_x = canvas_width - right_margin - max(right_top.width,
-                                                            right_bottom.width) - 2 * common_spacing - delimiter.width
+                                                            right_bottom.width) - 2 * common_spacing - right_delimiter.width
             delimiter_y = int(content_top_y - elem_height * .05)
-            self._paste(canvas, delimiter, (delimiter_x, delimiter_y), with_shadow=overlay)
+            paste_items.append((right_delimiter, delimiter_x, delimiter_y, False))
 
             right_logo_x = delimiter_x - common_spacing - right_logo.width
             right_logo_y = content_top_y + (elem_height - right_logo.height) // 2
-            self._paste(canvas, right_logo, (right_logo_x, right_logo_y), with_shadow=overlay)
+            paste_items.append((right_logo, right_logo_x, right_logo_y, True))
+
+        if auto_color and overlay:
+            boxes = []
+            for layer, px, py, _ in paste_items:
+                if layer is None or layer.width == 0 or layer.height == 0:
+                    continue
+                boxes.append((px, py, px + layer.width, py + layer.height))
+            if boxes:
+                x0 = min(b[0] for b in boxes)
+                y0 = min(b[1] for b in boxes)
+                x1 = max(b[2] for b in boxes)
+                y1 = max(b[3] for b in boxes)
+                pad_box = max(4, int(elem_height * 0.15))
+                luminance = self._region_luminance(canvas, (x0 - pad_box, y0 - pad_box, x1 + pad_box, y1 + pad_box))
+                rgb = (0, 0, 0) if luminance >= auto_color_threshold else (255, 255, 255)
+                logger.debug(f"watermark auto_color luminance={luminance:.1f} -> {rgb} opacity={opacity}")
+                tint = (*rgb, opacity)
+                colored = []
+                for layer, px, py, is_logo in paste_items:
+                    colored.append((self._colorize_layer(layer, tint, is_logo=is_logo), px, py, is_logo))
+                paste_items = colored
+        elif opacity < 255:
+            paste_items = [
+                (self._apply_opacity(layer, opacity), px, py, is_logo)
+                for layer, px, py, is_logo in paste_items
+            ]
+
+        use_shadow = overlay and not auto_color
+        for layer, px, py, _ in paste_items:
+            self._paste(canvas, layer, (px, py), with_shadow=use_shadow)
 
         ctx.update_buffer([canvas]).save_buffer(self.name()).success()
 

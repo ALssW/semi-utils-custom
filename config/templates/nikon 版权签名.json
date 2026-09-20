@@ -9,35 +9,14 @@
     "left_top": {
       "text_segments": [
         {
-          "text": "{{ (exif.CameraModelName|default('')).partition('Z')[0] }}",
+          "text": "{{ (exif.CameraModelName|default('')) }}",
           "color": "white",
           "font_path": "AlibabaPuHuiTi-2-85-Bold.otf",
           "is_bold": true,
           "trim": true
-        },
-        {
-          "text": "{{ ' Z ' if 'Z' in (exif.CameraModelName|default('')) else '' }}",
-          "color": "white",
-          "font_path": "specialalphabetsp04.otf",
-          "is_bold": true,
-          "trim": false
-        },
-        {
-          "text": "{{ (exif.CameraModelName|default('')).partition('Z')[2] }}  |",
-          "color": "white",
-          "font_path": "AlibabaPuHuiTi-2-85-Bold.otf",
-          "is_bold": true,
-          "trim": false
-        },
-        {
-          "text": " {% set fl = exif.FocalLengthIn35mmFormat|default('', true)|replace(' ', '') %}{% set aper = exif.AperatureValue or exif.FNumber or '' %}{% set shutter = exif.ShutterSpeed or exif.ShutterSpeedValue or '' %}{% set iso = exif.ISO|default('', true) %}{{ [fl, ('f/' ~ aper) if aper else '', (shutter ~ 's') if shutter else '', ('ISO ' ~ iso) if iso else '']|reject('equalto', '')|join('  ') }}",
-          "font_path": "AlibabaPuHuiTi-2-45-Light.otf",
-          "is_bold": true,
-          "height": "{{vh(0.60)}}",
-          "color": "white"
         }
       ],
-      "height": "{{vh(0.60)}}",
+      "height": "{{vh(0.80)}}",
       "color": "(255,255,255,255)",
       "processor_name": "multi_rich_text"
     },
@@ -46,7 +25,7 @@
       "text": "{{ (exif.DateTimeOriginal or exif.CreateDate or exif.DigitalCreationDate or exif.DateCreated or exif.DateTimeCreated or exif.DigitalCreationDateTime|default(''))[:10] | replace(':', '-') }} ©{{ (exif.DateTimeOriginal or exif.CreateDate or exif.DigitalCreationDate or exif.DateCreated or exif.DateTimeCreated or exif.DigitalCreationDateTime|default(''))[:4] | replace(':', '-') }} ALsW",
       "font_path": "AlibabaPuHuiTi-2-45-Light.otf",
       "is_bold": true,
-      "height": "{{vh(0.40)}}",
+      "height": "{{vh(0.50)}}",
       "color": "(255,255,255,255)"
     },
   

@@ -5,7 +5,7 @@ import webbrowser
 import queue
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+import datetime
 from flask import render_template, jsonify, request, send_file, Flask, Response, stream_with_context
 
 from core import CONFIG_PATH
@@ -181,7 +181,9 @@ def handle_process():
             # 获取 input_path 相对 input_folder 的位置
             relative_path = os.path.relpath(input_path, input_folder)
             # 基于 output_folder 组装出输出路径 output_path
-            output_path = os.path.join(output_folder, relative_path)
+            dot_index = relative_path.rfind(".")
+            file_name = relative_path[:dot_index] + "_W." + relative_path[dot_index + 1:]
+            output_path = os.path.join(output_folder, file_name)
 
             # 如果路径不存在, 那么递归创建文件夹
             output_dir = os.path.dirname(output_path)
@@ -201,7 +203,7 @@ def handle_process():
                 'file_path': str(_input_path).replace('\\', '/'),
                 'files': input_files
             }
-            final_template = template.render(context)
+            final_template = template.render(context, datetime=datetime, str=str)
             start_process(json.loads(final_template), input_path, output_path=output_path)
             return True, False, None
 

@@ -31,8 +31,8 @@ echo -e "${GREEN}✓  虚拟环境已激活${NC}"
 
 # 安装依赖
 echo -e "${GREEN}-  安装项目依赖...${NC}"
-pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple -r requirements.txt
-    -r requirements.txt
+pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple -r \
+    requirements.txt
 echo -e "${GREEN}✓  依赖安装完成${NC}"
 
 echo ""

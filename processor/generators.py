@@ -194,6 +194,11 @@ class GradientColorGenerator(Generator):
 class RichTextGenerator(Generator):
     @staticmethod
     def generate(segment: TextSegment) -> Image.Image:
+        """
+        按目标高度生成单段文字图。
+        :param segment: 文本片段配置
+        :return: RGBA 文字图像
+        """
         font = load_font(segment.font_path)
 
         # 获取文本尺寸
@@ -203,7 +208,7 @@ class RichTextGenerator(Generator):
         # 创建透明画布
         image = Image.new('RGBA', (int(bbox[2] - bbox[0]), metrics[0] + abs(metrics[1])), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
-        # 直接绘制文本
+        # 直接绘制文本，fill 支持 RGBA（第四通道为不透明度）
         draw.text((0, 0), text, font=font, fill=_parse_color(segment.color))
 
         # 使用 start_process 处理图片，解耦对 Filter 的直接依赖
@@ -220,15 +225,16 @@ class RichTextGenerator(Generator):
                 "save_buffer": False,
             }
         ]
-        # 使用临时 buffer 路径（实际上是 image 对象）
         from processor.core import start_process
         return start_process(pipeline, input_path=None, output_path=None, initial_buffer=[image])
 
     @staticmethod
     def render_on_baseline(segment: TextSegment) -> tuple:
         """
-        在 BASE_FONT_SIZE 下绘制文本，返回 (image, baseline_from_top)。
+        在 BASE_FONT_SIZE 下按基线绘制文本。
         使用 anchor=ls，保证不同字体共享同一基线坐标系。
+        :param segment: 文本片段配置
+        :return: (图像, 基线距顶部的距离)
         """
         font = load_font(segment.font_path)
         ascent, descent = font.getmetrics()
@@ -244,12 +250,16 @@ class RichTextGenerator(Generator):
         color = _parse_color(segment.color)
         # ls = left + baseline，基线位于 ascent 处
         try:
-            draw.text(( -bbox[0], ascent), text, font=font, fill=color, anchor='ls')
+            draw.text((-bbox[0], ascent), text, font=font, fill=color, anchor='ls')
         except TypeError:
             draw.text((-bbox[0], 0), text, font=font, fill=color)
         return image, ascent
 
     def process(self, ctx: PipelineContext):
+        """
+        生成单段富文本图层。
+        :param ctx: 管道上下文，字段与 TextSegment 一致
+        """
         img = RichTextGenerator.generate(TextSegment.from_dict(ctx))
         ctx.update_buffer([img]).save_buffer(self.name()).success()
 
@@ -265,6 +275,10 @@ class MultiRichTextGenerator(Generator):
         return img.getchannel('A').getbbox()
 
     def process(self, ctx: PipelineContext):
+        """
+        将多段富文本按同一基线拼接后缩放到目标高度。
+        :param ctx: 管道上下文，需包含 text_segments、height
+        """
         text_segments: List[TextSegment] = TextSegment.from_dicts(ctx.get("text_segments"))
         text_spacing = ctx.getint("text_spacing")
         height = int(float(ctx.get("height", 100)))
