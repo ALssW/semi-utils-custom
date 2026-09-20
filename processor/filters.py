@@ -245,53 +245,117 @@ class MarginWithRatioFilter(FilterProcessor):
 
 
 class WatermarkFilter(FilterProcessor):
+    @staticmethod
+    def _paste(canvas: Image.Image, layer: Image.Image, xy: tuple, with_shadow: bool = False):
+        """粘贴图层；overlay 模式下加轻微阴影，避免浅色背景上看不清。"""
+        if layer is None or layer.width == 0 or layer.height == 0:
+            return
+        mask = layer if layer.mode == 'RGBA' else None
+        if with_shadow and layer.mode == 'RGBA':
+            alpha = layer.getchannel('A')
+            shadow = Image.new('RGBA', layer.size, (0, 0, 0, 0))
+            shadow.putalpha(alpha.point(lambda a: int(a * 0.55)))
+            sx, sy = xy[0] + max(1, layer.height // 40), xy[1] + max(1, layer.height // 40)
+            canvas.paste(shadow, (sx, sy), shadow)
+        canvas.paste(layer, xy, mask=mask)
+
+    @staticmethod
+    def _empty_image():
+        return Image.new("RGBA", (0, 0), (0, 0, 0, 0))
+
+    def _render_text_slot(self, cfg, default_text_height: int):
+        if not cfg:
+            return self._empty_image()
+        if isinstance(cfg, list):
+            for item in cfg:
+                if isinstance(item, dict) and item.get("processor_name") in ("rich_text", "multi_rich_text") and "height" not in item:
+                    item["height"] = default_text_height
+            return start_process(cfg)
+        if isinstance(cfg, dict) and "height" not in cfg:
+            cfg["height"] = default_text_height
+        return start_process([cfg])
+
     def process(self, ctx: PipelineContext):
         img = ctx.get_buffer()[0]
+        if img.mode != 'RGBA':
+            img = img.convert('RGBA')
+        # overlay=true：水印叠在图片内部，不扩展边框
+        overlay_raw = ctx.get("overlay", False)
+        if isinstance(overlay_raw, str):
+            overlay = overlay_raw.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            overlay = bool(overlay_raw)
         color = ctx.get("color", "white")
-        delimiter_color = ctx.get("delimiter_color", "black")
-        delimiter_width = ctx.getint("delimiter_width", int(img.width * .003))
-        left_margin = ctx.getint("left_margin", 0)
-        right_margin = ctx.getint("right_margin", 0)
-        top_margin = ctx.getint("top_margin", 0)
-        bottom_margin = ctx.getint("bottom_margin", int(img.height * .12))
-        middle_spacing = ctx.getint("middle_spacing", int(bottom_margin * .05))
+        delimiter_color = ctx.getcolor("delimiter_color", (0, 0, 0, 255))
+        delimiter_width = ctx.getint("delimiter_width", int(img.width * (.002 if overlay else .003)))
         right_alignment = ctx.getenum("right_alignment", Alignment.RIGHT, Alignment)
+        # block_align: left|right —— logo+左侧文本块整体靠左或靠右
+        block_align_raw = str(ctx.get("block_align", "left")).strip().lower()
+        block_align_right = block_align_raw in {"right", "end"}
 
-        for t_s in [ctx.get("left_top"), ctx.get("left_bottom"), ctx.get("right_top"), ctx.get("right_bottom")]:
-            if "height" not in t_s:
-                t_s["height"] = int(bottom_margin * .3)
+        if overlay:
+            left_margin = ctx.getint("left_margin", int(img.width * .03))
+            right_margin = ctx.getint("right_margin", int(img.width * .03))
+            top_margin = 0
+            bottom_margin = 0
+            padding = ctx.getint("padding", int(img.height * .03))
+            default_text_height = ctx.getint("text_height", max(int(img.height * .015), 12))
+            middle_spacing = ctx.getint("middle_spacing", max(int(img.height * .004), 2))
+            common_spacing = ctx.getint("common_spacing", max(int(img.width * .01), 4))
+        else:
+            left_margin = ctx.getint("left_margin", 0)
+            right_margin = ctx.getint("right_margin", 0)
+            top_margin = ctx.getint("top_margin", 0)
+            bottom_margin = ctx.getint("bottom_margin", int(img.height * .12))
+            padding = 0
+            default_text_height = int(bottom_margin * .3)
+            middle_spacing = ctx.getint("middle_spacing", int(bottom_margin * .05))
+            common_spacing = ctx.getint("common_spacing", int(.02 * (img.width + left_margin + right_margin)))
 
-        left_top = start_process([ctx.get("left_top")])
-        left_bottom = start_process([ctx.get("left_bottom")])
-        right_top = start_process([ctx.get("right_top")])
-        right_bottom = start_process([ctx.get("right_bottom")])
+        left_top = self._render_text_slot(ctx.get("left_top"), default_text_height)
+        left_middle = self._render_text_slot(ctx.get("left_middle"), default_text_height)
+        left_bottom = self._render_text_slot(ctx.get("left_bottom"), default_text_height)
+        right_top = self._render_text_slot(ctx.get("right_top"), default_text_height)
+        right_bottom = self._render_text_slot(ctx.get("right_bottom"), default_text_height)
 
         left_logo = Image.open(ctx.get("left_logo")).convert('RGBA') if ctx.get("left_logo") else None
         right_logo = Image.open(ctx.get("right_logo")).convert('RGBA') if ctx.get("right_logo") else None
         center_logo = Image.open(ctx.get("center_logo")).convert('RGBA') if ctx.get("center_logo") else None
         center_logo_height = ctx.getint("center_logo_height")
 
-        canvas_width = img.width + left_margin + right_margin
-        canvas_height = img.height + top_margin + bottom_margin
-        common_spacing = int(.02 * canvas_width)
+        if overlay:
+            canvas = img.copy()
+            canvas_width, canvas_height = canvas.size
+            footer_start_y = 0
+        else:
+            canvas_width = img.width + left_margin + right_margin
+            canvas_height = img.height + top_margin + bottom_margin
+            canvas = Image.new("RGBA", (canvas_width, canvas_height), color)
+            canvas.paste(img, (left_margin, top_margin), mask=img)
+            footer_start_y = top_margin + img.height
 
-        # 新建画布
-        canvas = Image.new("RGBA", (canvas_width, canvas_height), color)
-        # 主图
-        canvas.paste(img, (left_margin, top_margin), mask=img if img.mode == 'RGBA' else None)
-        # 底部区域
-        footer_start_y = top_margin + img.height
-        # 左图标处理
-        left_logo_width = 0
-        if left_logo:
-            logo_size = canvas_height - footer_start_y
-            # 缩放图标以适应底部高度 (正方形)
-            left_logo = left_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
-            canvas.paste(left_logo, (left_margin, footer_start_y), mask=left_logo if left_logo.mode == 'RGBA' else None)
-            left_logo_width = logo_size
+        left_lines = [im for im in (left_top, left_middle, left_bottom) if im.height > 0]
+        if left_lines:
+            left_stack_height = sum(im.height for im in left_lines) + middle_spacing * (len(left_lines) - 1)
+        else:
+            left_stack_height = 0
+
+        right_lines = [im for im in (right_top, right_bottom) if im.height > 0]
+        if right_lines:
+            right_stack_height = sum(im.height for im in right_lines) + middle_spacing * (len(right_lines) - 1)
+        else:
+            right_stack_height = 0
+
+        elem_height = max(left_stack_height, right_stack_height, 1)
+        if overlay:
+            elem_margin = padding
+            content_top_y = canvas_height - padding - elem_height
+        else:
+            elem_margin = int((bottom_margin - elem_height) / 2)
+            content_top_y = footer_start_y + elem_margin
 
         if center_logo:
-            logo_height = center_logo_height if center_logo_height else canvas_height - footer_start_y
+            logo_height = center_logo_height if center_logo_height else (elem_height if overlay else canvas_height - footer_start_y)
             resize_ctx = PipelineContext({
                 'buffer': [center_logo],
                 'height': logo_height
@@ -299,69 +363,100 @@ class WatermarkFilter(FilterProcessor):
             ResizeFilter().process(resize_ctx)
             center_logo = resize_ctx.get_buffer()[0]
             center_x = (canvas.width - center_logo.width) // 2
-            center_y = footer_start_y + ((canvas.height - footer_start_y) - center_logo.height) // 2
-            canvas.paste(center_logo, (center_x, center_y), mask=center_logo if center_logo.mode == 'RGBA' else None)
+            if overlay:
+                center_y = content_top_y + (elem_height - center_logo.height) // 2
+            else:
+                center_y = footer_start_y + ((canvas.height - footer_start_y) - center_logo.height) // 2
+            self._paste(canvas, center_logo, (center_x, center_y), with_shadow=overlay)
 
-        # 文本处理
-        elem_height = max(left_top.height + left_bottom.height, right_top.height + right_bottom.height) + middle_spacing
-        # 计算文本块距离底部边缘的留白，使其在 bottom_margin 区域内垂直居中
-        elem_margin = int((bottom_margin - elem_height) / 2)
-        # PIL 坐标原点在左上角。
-        l_x = left_margin + left_logo_width + common_spacing
+        # 左侧文本块宽度（左对齐）
+        text_block_width = max(left_top.width, left_middle.width, left_bottom.width, 0)
 
-        # 右侧文本 X 坐标基准 (右对齐)
-        # 右侧内容的右边界 = canvas_width - right_margin - right_logo_width
+        # 预缩放 logo，计算整块宽度
+        logo_block_width = 0
+        delimiter = None
+        if left_logo:
+            left_logo = self._resize_keep_ratio(left_logo, elem_height)
+            delimiter = Image.new("RGBA", (delimiter_width, int(elem_height * 1.1)), delimiter_color)
+            logo_block_width = left_logo.width + common_spacing + delimiter.width + common_spacing
+
+        total_left_block_width = logo_block_width + text_block_width
+
+        if block_align_right:
+            block_right = canvas_width - right_margin - common_spacing
+            block_left = max(left_margin + common_spacing, block_right - total_left_block_width)
+        else:
+            block_left = left_margin + common_spacing
+
+        l_x = block_left
+        if left_logo:
+            left_logo_x = block_left
+            left_logo_y = content_top_y + (elem_height - left_logo.height) // 2
+            self._paste(canvas, left_logo, (left_logo_x, left_logo_y), with_shadow=overlay)
+
+            delimiter_x = left_logo_x + left_logo.width + common_spacing
+            delimiter_y = int(content_top_y - elem_height * .05)
+            self._paste(canvas, delimiter, (delimiter_x, delimiter_y), with_shadow=overlay)
+
+            l_x = delimiter_x + delimiter.width + common_spacing
+
+        # 左侧三行：自上而下 left_top / left_middle / left_bottom，整体贴底
+        y = canvas_height - elem_margin
+        lb_y = y - left_bottom.height
+        y = lb_y
+        if left_middle.height > 0:
+            y -= middle_spacing + left_middle.height
+            lm_y = y
+        else:
+            lm_y = lb_y
+        if left_top.height > 0:
+            gap = middle_spacing if (left_middle.height > 0 or left_bottom.height > 0) else 0
+            lt_y = y - gap - left_top.height
+        else:
+            lt_y = lm_y
+
         right_content_end_x = canvas_width - right_margin
-        # --- 左上 (Left Top) ---
-        # 距离下边缘: elem_margin + left_bottom.height + middle_spacing + left_top.height
-        bottom_dist_lt = elem_margin + left_bottom.height + middle_spacing + left_top.height
-        lt_y = canvas_height - bottom_dist_lt
+        if right_bottom.height > 0 or right_top.height > 0:
+            rb_y = canvas_height - elem_margin - right_bottom.height
+            rt_y = rb_y - (middle_spacing + right_top.height if right_top.height > 0 else 0)
+            if left_bottom.height > 0:
+                rb_y = (lb_y + left_bottom.height) - right_bottom.height
+            if left_top.height > 0:
+                rt_y = (lt_y + left_top.height) - right_top.height
+            rt_x = right_content_end_x - right_top.width - common_spacing
+            rb_x = right_content_end_x - right_bottom.width - common_spacing
+            if Alignment.LEFT == right_alignment:
+                rt_x = rb_x = min(rt_x, rb_x)
+            self._paste(canvas, right_top, (rt_x, rt_y), with_shadow=overlay)
+            self._paste(canvas, right_bottom, (rb_x, rb_y), with_shadow=overlay)
 
-        # --- 左下 (Left Bottom) ---
-        # 距离下边缘: elem_margin + left_bottom.height
-        bottom_dist_lb = elem_margin + left_bottom.height
-        lb_y = canvas_height - bottom_dist_lb
+        self._paste(canvas, left_top, (l_x, lt_y), with_shadow=overlay)
+        if left_middle.height > 0:
+            self._paste(canvas, left_middle, (l_x, lm_y), with_shadow=overlay)
+        self._paste(canvas, left_bottom, (l_x, lb_y), with_shadow=overlay)
 
-        # --- 右上 (Right Top) ---
-        # 规则：右上和左上是“底部对齐”。
-        # 左上图片的底部 Y 坐标 = lt_y + left_top.height
-        # 右上 Y = 左上底部 Y - 右上高度
-        rt_y = (lt_y + left_top.height) - right_top.height
-        rt_x = right_content_end_x - right_top.width - common_spacing  # 右对齐计算
-        # --- 右下 (Right Bottom) ---
-        # 规则：右下和左下是“底部对齐”。
-        # 左下图片的底部 Y 坐标 = lb_y + left_bottom.height
-        # 右下 Y = 左下底部 Y - 右下高度
-        rb_y = (lb_y + left_bottom.height) - right_bottom.height
-        rb_x = right_content_end_x - right_bottom.width - common_spacing  # 右对齐计算
-        if Alignment.LEFT == right_alignment:
-            rt_x = rb_x = min(rt_x, rb_x)
-
-        # 6. 绘制文本元素
-        # 使用 mask 确保透明背景的文字能正确叠加
-        canvas.paste(left_top, (l_x, lt_y), mask=left_top if left_top.mode == 'RGBA' else None)
-        canvas.paste(left_bottom, (l_x, lb_y), mask=left_bottom if left_bottom.mode == 'RGBA' else None)
-        canvas.paste(right_top, (rt_x, rt_y), mask=right_top if right_top.mode == 'RGBA' else None)
-        canvas.paste(right_bottom, (rb_x, rb_y), mask=right_bottom if right_bottom.mode == 'RGBA' else None)
-
-        # 右图标处理 (逻辑类推：放置在右边距内侧)
-        if right_logo:
-            # 先画一条分割线
-            logo_size = elem_height
-            delimiter = Image.new("RGBA", (delimiter_width, int(logo_size * 1.1)), delimiter_color)
+        if right_logo and (right_top.height > 0 or right_bottom.height > 0):
+            right_logo = self._resize_keep_ratio(right_logo, elem_height)
+            delimiter = Image.new("RGBA", (delimiter_width, int(elem_height * 1.1)), delimiter_color)
             delimiter_x = canvas_width - right_margin - max(right_top.width,
                                                             right_bottom.width) - 2 * common_spacing - delimiter.width
-            delimiter_y = int(footer_start_y + elem_margin - logo_size * .05)
-            canvas.paste(delimiter, (delimiter_x, delimiter_y), mask=delimiter)
+            delimiter_y = int(content_top_y - elem_height * .05)
+            self._paste(canvas, delimiter, (delimiter_x, delimiter_y), with_shadow=overlay)
 
-            right_logo = right_logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
-            right_logo_x = delimiter_x - common_spacing - logo_size
-            right_logo_y = footer_start_y + elem_margin
-            canvas.paste(right_logo, (right_logo_x, right_logo_y),
-                         mask=right_logo if right_logo.mode == 'RGBA' else None)
+            right_logo_x = delimiter_x - common_spacing - right_logo.width
+            right_logo_y = content_top_y + (elem_height - right_logo.height) // 2
+            self._paste(canvas, right_logo, (right_logo_x, right_logo_y), with_shadow=overlay)
 
-        # 7. 返回结果
         ctx.update_buffer([canvas]).save_buffer(self.name()).success()
+
+    @staticmethod
+    def _resize_keep_ratio(logo: Image.Image, target_height: int) -> Image.Image:
+        """按目标高度缩放，保持原始宽高比。"""
+        if target_height <= 0 or logo.height <= 0:
+            return logo
+        new_h = target_height
+        new_w = max(1, int(round(logo.width * (new_h / logo.height))))
+        return logo.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
     def name(self) -> str:
         return "watermark"

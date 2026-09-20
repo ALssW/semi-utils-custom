@@ -224,6 +224,31 @@ class RichTextGenerator(Generator):
         from processor.core import start_process
         return start_process(pipeline, input_path=None, output_path=None, initial_buffer=[image])
 
+    @staticmethod
+    def render_on_baseline(segment: TextSegment) -> tuple:
+        """
+        在 BASE_FONT_SIZE 下绘制文本，返回 (image, baseline_from_top)。
+        使用 anchor=ls，保证不同字体共享同一基线坐标系。
+        """
+        font = load_font(segment.font_path)
+        ascent, descent = font.getmetrics()
+        text = segment.text
+        if not text:
+            return Image.new('RGBA', (0, 0), (0, 0, 0, 0)), ascent
+
+        bbox = font.getbbox(text)
+        width = max(1, int(bbox[2] - bbox[0]))
+        height = max(1, ascent + abs(descent))
+        image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        color = _parse_color(segment.color)
+        # ls = left + baseline，基线位于 ascent 处
+        try:
+            draw.text(( -bbox[0], ascent), text, font=font, fill=color, anchor='ls')
+        except TypeError:
+            draw.text((-bbox[0], 0), text, font=font, fill=color)
+        return image, ascent
+
     def process(self, ctx: PipelineContext):
         img = RichTextGenerator.generate(TextSegment.from_dict(ctx))
         ctx.update_buffer([img]).save_buffer(self.name()).success()
@@ -233,32 +258,91 @@ class RichTextGenerator(Generator):
 
 
 class MultiRichTextGenerator(Generator):
+    @staticmethod
+    def _ink_bbox(img: Image.Image):
+        if img.mode != 'RGBA':
+            img = img.convert('RGBA')
+        return img.getchannel('A').getbbox()
+
     def process(self, ctx: PipelineContext):
         text_segments: List[TextSegment] = TextSegment.from_dicts(ctx.get("text_segments"))
-        text_alignment = ctx.get("text_alignment")
         text_spacing = ctx.getint("text_spacing")
-        height = ctx.get("height", 100)
+        height = int(float(ctx.get("height", 100)))
+        any_bold = any(seg.is_bold for seg in text_segments)
 
-        text_images = []
+        # 1) 各段按基线绘制
+        raw_parts: List[tuple] = []  # (image, font_path)
         for segment in text_segments:
-            segment.height = height
-            context = PipelineContext(asdict(segment))
-            context.set("save_buffer", False)
-            RichTextGenerator().process(context)
-            text_images.extend(context.get_buffer())
+            if not segment.text:
+                continue
+            img, _ = RichTextGenerator.render_on_baseline(segment)
+            if img.width == 0 or img.height == 0:
+                continue
+            raw_parts.append((img, segment.font_path or ''))
 
-        # 使用 start_process 替代直接调用 ConcatMerger，解耦对 Merger 的直接依赖
+        if not raw_parts:
+            ctx.update_buffer([Image.new('RGBA', (0, 0), (0, 0, 0, 0))]).success()
+            return
+
+        ref_font = raw_parts[0][1]
+
+        # 2) 以首段墨迹高度为字帽高参考，统一各段视觉高度（解决 ℤ 等符号字体偏大）
+        ref_box = self._ink_bbox(raw_parts[0][0])
+        ref_ink_h = (ref_box[3] - ref_box[1]) if ref_box else raw_parts[0][0].height
+
+        unified: List[tuple] = []  # (image, font_path)
+        for img, font_path in raw_parts:
+            box = self._ink_bbox(img)
+            if not box or ref_ink_h <= 0:
+                unified.append((img, font_path))
+                continue
+            ink_h = box[3] - box[1]
+            if ink_h <= 0:
+                unified.append((img, font_path))
+                continue
+            if abs(ink_h - ref_ink_h) > max(2, ref_ink_h * 0.03):
+                scale = ref_ink_h / ink_h
+                new_w = max(1, int(round(img.width * scale)))
+                new_h = max(1, int(round(img.height * scale)))
+                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            unified.append((img, font_path))
+
+        # 3) 按墨迹底边对齐（大写字母视觉基线）
+        ink_boxes = []
+        for img, _ in unified:
+            box = self._ink_bbox(img)
+            ink_boxes.append(box if box else (0, 0, img.width, img.height))
+
+        max_below = max(img.height - box[3] for (img, _), box in zip(unified, ink_boxes))
+        max_above = max(box[3] for box in ink_boxes)
+        optical_pad = max(2, ref_ink_h // 16)
+        canvas_h = max_above + max_below + optical_pad
+
+        spacing_base = 0
+        if text_spacing and height > 0:
+            spacing_base = max(0, int(round(text_spacing * canvas_h / height)))
+
+        total_w = sum(img.width for img, _ in unified) + spacing_base * (len(unified) - 1)
+        canvas = Image.new('RGBA', (max(1, total_w), max(1, canvas_h)), (0, 0, 0, 0))
+
+        ink_bottom_y = max_above
+        ref_ink_h_final = ink_boxes[0][3] - ink_boxes[0][1]
+        x = 0
+        for (img, font_path), box in zip(unified, ink_boxes):
+            y = ink_bottom_y - box[3]
+            # 符号字体相对正文字体做轻微上移，抵消双线字母的视觉下沉
+            if font_path != ref_font:
+                y -= max(1, int(round(ref_ink_h_final * 0.08)))
+            canvas.paste(img, (x, max(0, y)), img)
+            x += img.width + spacing_base
+
+        # 4) 整体缩放
+        target_h = int(height * 1.13) if any_bold else height
         from processor.core import start_process
-        pipeline = [
-            {
-                "processor_name": "concat",
-                "alignment": text_alignment,
-                "spacing": text_spacing,
-                "save_buffer": False,
-            }
-        ]
-        result = start_process(pipeline, initial_buffer=text_images)
-
+        result = start_process(
+            [{"processor_name": "resize", "height": target_h, "save_buffer": False}],
+            initial_buffer=[canvas],
+        )
         ctx.update_buffer([result]).save_buffer(self.name()).success()
 
     def name(self) -> str:

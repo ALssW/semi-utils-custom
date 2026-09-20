@@ -1,0 +1,33 @@
+[
+  {
+    "overlay": true,
+    "block_align": "left",
+    "text_height": "{{vh(0.84)}}",
+    "padding": "{{vh(1.4)}}",
+    "left_top": {
+      "processor_name": "rich_text",
+      "text": "{{ exif.CameraModelName|default('-')|replace('Z', ' ℤ ') }}",
+      "font_path": "seguisym.ttf",
+      "height": "{{vh(0.90)}}",
+      "color": "white",
+      "is_bold": true
+    },
+    "left_middle": {
+      "processor_name": "rich_text",
+      "text": "{{exif.FocalLengthIn35mmFormat|replace(' ', '')|default('-')}} f/{{exif.AperatureValue or exif.FNumber|default('-')}} {{exif.ShutterSpeed or exif.ShutterSpeedValue|default('-')}}s ISO {{exif.ISO|default('0')}}",
+      "font_path": "seguisym.ttf",
+      "height": "{{vh(0.78)}}",
+      "color": "white"
+    },
+    "left_bottom": {
+      "processor_name": "rich_text",
+      "text": "{{ (exif.DateTimeOriginal or exif.CreateDate or exif.DigitalCreationDate or exif.DateCreated or exif.DateTimeCreated or exif.DigitalCreationDateTime|default(''))[:10] | replace(':', '-') }}",
+      "font_path": "seguisym.ttf",
+      "height": "{{vh(0.73)}}",
+      "color": "white"
+    },
+    "left_logo": "{{auto_logo('my')|replace('\\', '/')}}",
+    "delimiter_color": "(255,255,255,180)",
+    "processor_name": "watermark"
+  }
+]
