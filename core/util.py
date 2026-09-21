@@ -219,16 +219,19 @@ def parse_shoot_timestamp(exif: dict) -> float | None:
     if not exif:
         return None
 
-    # 优先真实拍摄时间；ModifyDate 常为导出时间，放最后
+    # 优先「数字创建时间」（CreateDate / DateCreated，exiftool 的 DigitalCreationDateTime）。
+    # 部分相册/导出工具（如小米相册、Lightroom 导出）会把 DateTimeOriginal 写坏成同一批次的
+    # 常量值（例如整批都是 00:37:1x），导致按它排序时顺序错乱；CreateDate 仍是真实且有序的。
+    # ModifyDate 常为导出时间，放最后。
     for key in (
-        'DateTimeOriginal',
-        'SubSecDateTimeOriginal',
+        'DigitalCreationDateTime',
         'CreateDate',
         'SubSecCreateDate',
-        'DateTimeCreated',
-        'DigitalCreationDateTime',
         'DateCreated',
+        'DateTimeCreated',
         'DigitalCreationDate',
+        'DateTimeOriginal',
+        'SubSecDateTimeOriginal',
         'GPSDateTime',
         'ModifyDate',
         'SubSecModifyDate',

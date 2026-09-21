@@ -11,3 +11,4 @@ dist
 logs
 tmp
 .venv
+output.zip
