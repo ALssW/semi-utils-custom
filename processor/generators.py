@@ -15,7 +15,14 @@ from processor.core import PipelineContext, ImageProcessor, Direction, _parse_co
 BASE_FONT_SIZE = 512
 
 
-def load_font(font_path: str):
+def _font_size_for_target(target_height: int) -> int:
+    """按目标像素高度选择绘制字号，控制缩小倍数，避免小图文字被从 512px 一次压糊。"""
+    target_height = max(1, int(target_height))
+    return int(max(64, min(BASE_FONT_SIZE, target_height * 4)))
+
+
+def load_font(font_path: str, size: int = BASE_FONT_SIZE):
+    size = max(1, int(size))
     try:
         if font_path:
             font_file = Path(font_path)
@@ -24,12 +31,12 @@ def load_font(font_path: str):
             if not font_file.is_absolute():
                 font_file = fonts_dir / font_path
 
-            return ImageFont.truetype(str(font_file), BASE_FONT_SIZE)
+            return ImageFont.truetype(str(font_file), size)
         else:
             # 尝试常见系统字体
             for fallback in [fonts_dir / "AlibabaPuHuiTi-2-45-Light.otf", "arial.ttf", "Arial.ttf", "DejaVuSans.ttf"]:
                 try:
-                    return ImageFont.truetype(fallback, BASE_FONT_SIZE)
+                    return ImageFont.truetype(fallback, size)
                 except OSError:
                     continue
             else:
@@ -199,7 +206,7 @@ class RichTextGenerator(Generator):
         :param segment: 文本片段配置
         :return: RGBA 文字图像
         """
-        font = load_font(segment.font_path)
+        font = load_font(segment.font_path, _font_size_for_target(segment.height))
 
         # 获取文本尺寸
         metrics = font.getmetrics()
@@ -229,14 +236,14 @@ class RichTextGenerator(Generator):
         return start_process(pipeline, input_path=None, output_path=None, initial_buffer=[image])
 
     @staticmethod
-    def render_on_baseline(segment: TextSegment) -> tuple:
+    def render_on_baseline(segment: TextSegment, font_size: int = BASE_FONT_SIZE) -> tuple:
         """
         在 BASE_FONT_SIZE 下按基线绘制文本。
         使用 anchor=ls，保证不同字体共享同一基线坐标系。
         :param segment: 文本片段配置
         :return: (图像, 基线距顶部的距离)
         """
-        font = load_font(segment.font_path)
+        font = load_font(segment.font_path, font_size)
         ascent, descent = font.getmetrics()
         text = segment.text
         if not text:
@@ -285,11 +292,12 @@ class MultiRichTextGenerator(Generator):
         any_bold = any(seg.is_bold for seg in text_segments)
 
         # 1) 各段按基线绘制
+        font_px = _font_size_for_target(height)
         raw_parts: List[tuple] = []  # (image, font_path)
         for segment in text_segments:
             if not segment.text:
                 continue
-            img, _ = RichTextGenerator.render_on_baseline(segment)
+            img, _ = RichTextGenerator.render_on_baseline(segment, font_px)
             if img.width == 0 or img.height == 0:
                 continue
             raw_parts.append((img, segment.font_path or ''))

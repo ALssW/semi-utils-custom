@@ -5,3 +5,4 @@ pillow
 pillow-heif
 loguru
 tomli
+imageio-ffmpeg

@@ -1,39 +1,57 @@
 [
   {
     "overlay": true,
+    "scale": 1,
     "block_align": "left",
     "text_height": "{{vh(0.34)}}",
     "common_spacing": "{{vh(0.4)}}",
     "middle_spacing": "{{vh(0.04)}}",
-    "padding": "{{vh(2)}}",
+    "padding": "{{vh(0.45)}}",
+    "left_margin": "{{vw(0.6)}}",
+    "right_margin": "{{vw(0.6)}}",
     "left_top": {
       "text_segments": [
         {
-          "text": "{{ (exif.CameraModelName|default('')) }}",
+          "text": "{{ exif.CameraModelName|default('') }}",
           "color": "white",
           "font_path": "AlibabaPuHuiTi-2-85-Bold.otf",
           "is_bold": true,
           "trim": true
         }
       ],
-      "height": "{{vh(0.80)}}",
+      "height": "{{vh(0.70)}}",
       "color": "(255,255,255,255)",
       "processor_name": "multi_rich_text"
     },
     "left_bottom": {
       "processor_name": "rich_text",
-      "text": "{{ (exif.DateTimeOriginal or exif.CreateDate or exif.DigitalCreationDate or exif.DateCreated or exif.DateTimeCreated or exif.DigitalCreationDateTime|default(''))[:10] | replace(':', '-') }} ©{{ (exif.DateTimeOriginal or exif.CreateDate or exif.DigitalCreationDate or exif.DateCreated or exif.DateTimeCreated or exif.DigitalCreationDateTime|default(''))[:4] | replace(':', '-') }} ALsW",
+      "text": "{{ (exif.DateTimeOriginal or exif.CreateDate or exif.DigitalCreationDate or exif.DateCreated or exif.DateTimeCreated or exif.DigitalCreationDateTime|default(''))[:10] | replace(':', '-') }}",
       "font_path": "AlibabaPuHuiTi-2-45-Light.otf",
-      "is_bold": true,
-      "height": "{{vh(0.50)}}",
+      "is_bold": false,
+      "height": "{{vh(0.48)}}",
       "color": "(255,255,255,255)"
     },
-  
-    "left_logo": "{{auto_logo('my') |replace('\\', '/')}}",
+    "logo_bottom": {
+      "processor_name": "rich_text",
+      "text": "©{{ (exif.DateTimeOriginal or exif.CreateDate or exif.DigitalCreationDate or exif.DateCreated or exif.DateTimeCreated or exif.DigitalCreationDateTime|default(''))[:4] }} ALsW",
+      "font_path": "AlibabaPuHuiTi-2-45-Light.otf",
+      "is_bold": false,
+      "trim": true,
+      "height": "{{vh(0.10)}}",
+      "color": "(255,255,255,255)"
+    },
+    "logo_bottom_position": "br",
+    "logo_bottom_inset": 0.02,
+    "left_logo": "{{auto_logo('my')|replace('\\', '/')}}",
+    "left_logo_height": "{{vh(0.75)}}",
     "delimiter_color": "(255,255,255,255)",
-    "delimiter_width": "{{vh(0.05)}}",
+    "delimiter_width": 2,
     "auto_color": true,
-    "opacity": 130,
+    "busy_opacity_boost": false,
+    "opacity": 220,
+    "stroke_width": "{{vh(0.15)}}",
+    "stroke_opacity": 255,
+    "stroke_color": "auto",
     "processor_name": "watermark"
   }
 ]

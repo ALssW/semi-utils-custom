@@ -1,6 +1,7 @@
 import functools
 import json
 import os
+import tempfile
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -12,7 +13,7 @@ from PIL import Image, ImageColor, ImageOps
 
 from core.configs import load_config
 from core.logger import logger
-from core.util import get_exif, log_rt
+from core.util import get_exif, log_rt, apply_shoot_time_mtime, preserve_exif, preserve_motion_photo
 
 
 class PipelineContext(MutableMapping):
@@ -324,6 +325,52 @@ def start_process(data: List[dict], input_path: str = None, output_path: str = N
 
     nodes[-1].save_buffer("final").success()
     if output_path is not None:
-        nodes[-1].get_buffer()[0].convert("RGB").save(output_path, quality=load_config().getint('DEFAULT', 'quality'), subsampling=load_config().getint('DEFAULT', 'subsampling'))
+        output_path = os.path.abspath(output_path)
+        img_rgb = nodes[-1].get_buffer()[0].convert("RGB")
+        quality = load_config().getint('DEFAULT', 'quality')
+        subsampling = load_config().getint('DEFAULT', 'subsampling')
+        _atomic_save_jpeg(img_rgb, output_path, quality=quality, subsampling=subsampling)
+        # 回写原图 EXIF，并将修改时间同步为拍摄时间（失败不阻断出图）
+        exif = nodes[-1].get('exif') or (get_exif(input_path) if input_path else {})
+        try:
+            if input_path:
+                preserve_exif(input_path, output_path, exif)
+                watermark_overlay = None
+                for node in nodes:
+                    if node.get("watermark_overlay") is not None:
+                        watermark_overlay = node.get("watermark_overlay")
+                preserve_motion_photo(input_path, output_path, watermark_overlay=watermark_overlay)
+            apply_shoot_time_mtime(output_path, exif)
+        except OSError as e:
+            logger.warning(f"post-save metadata failed (image kept): {output_path} : {e}")
         logger.success(f"Generated new image: {output_path}")
     return nodes[-1].get_buffer()[0]
+
+
+def _atomic_save_jpeg(img: Image.Image, output_path: str, quality: int = 95, subsampling: int = 0):
+    """
+    先写同目录临时文件再 replace，避免 Windows 上直接覆盖已存在 jpg 时出现 Errno 22。
+    """
+    directory = os.path.dirname(output_path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".su_tmp_", suffix=".jpg", dir=directory)
+    os.close(fd)
+    try:
+        img.save(tmp_path, quality=quality, subsampling=subsampling)
+        try:
+            os.replace(tmp_path, output_path)
+        except OSError:
+            # 目标被占用时：删旧再替
+            try:
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+            except OSError:
+                pass
+            os.replace(tmp_path, output_path)
+    except Exception:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        raise

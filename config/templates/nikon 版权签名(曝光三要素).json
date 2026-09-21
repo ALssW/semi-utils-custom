@@ -1,46 +1,72 @@
 [
   {
     "overlay": true,
+    "scale": 1,
+    "min_text_px": 26,
     "block_align": "left",
     "text_height": "{{vh(0.34)}}",
     "common_spacing": "{{vh(0.4)}}",
-    "middle_spacing": "{{vh(0.04)}}",
-    "padding": "{{vh(2)}}",
+    "middle_spacing": "{{vh(0.06)}}",
+    "padding": "{{vh(1)}}",
+    "left_margin": "{{vw(1)}}",
+    "right_margin": "{{vw(1)}}",
     "left_top": {
       "text_segments": [
         {
-          "text": "{{ (exif.CameraModelName|default('ALsW PHOTOGRAPHY'))}}",
+          "text": "SNAPSHOT OF MY MIND",
           "color": "white",
           "font_path": "AlibabaPuHuiTi-2-85-Bold.otf",
           "is_bold": true,
           "trim": true
-        },
-        {
-          "text": " {% set fl = exif.FocalLengthIn35mmFormat|default('', true)|replace(' ', '') %}{% set aper = exif.AperatureValue or exif.FNumber or '' %}{% set shutter = exif.ShutterSpeed or exif.ShutterSpeedValue or '' %}{% set iso = exif.ISO|default('', true) %}{{ [fl, ('f/' ~ aper) if aper else '', (shutter ~ 's') if shutter else '', ('ISO ' ~ iso) if iso else '']|reject('equalto', '')|join('  ') }}",
-          "font_path": "AlibabaPuHuiTi-2-45-Light.otf",
-          "is_bold": true,
-          "height": "{{vh(0.60)}}",
-          "color": "white"
         }
       ],
-      "height": "{{vh(0.60)}}",
+      "height": "{{vh(0.55)}}",
       "color": "(255,255,255,255)",
       "processor_name": "multi_rich_text"
     },
-    "left_bottom": {
+    "left_middle": {
+      "text_segments": [
+        {
+          "text": "{% set dto = (exif.DateTimeOriginal or exif.CreateDate or exif.DigitalCreationDate or exif.DateCreated or exif.DateTimeCreated or exif.DigitalCreationDateTime)|default('') %}{{ [exif.CameraModelName|default(''), (dto|replace(':', '-'))[:10]]|reject('equalto', '')|join('  ') }}{% if exif.CameraModelName or dto %}  {% endif %}",
+          "color": "white",
+          "font_path": "AlibabaPuHuiTi-2-85-Bold.otf",
+          "is_bold": true,
+          "trim": false
+        },
+        {
+          "text": "{% set fl = exif.FocalLengthIn35mmFormat|default('', true)|replace(' ', '') %}{% set aper = exif.AperatureValue or exif.FNumber or '' %}{% set shutter = exif.ShutterSpeed or exif.ShutterSpeedValue or '' %}{% set iso = exif.ISO|default('', true) %}{{ [fl, ('f/' ~ aper) if aper else '', (shutter ~ 's') if shutter else '', ('ISO ' ~ iso) if iso else '']|reject('equalto', '')|join('  ') }}",
+          "color": "white",
+          "font_path": "AlibabaPuHuiTi-2-45-Light.otf",
+          "is_bold": false,
+          "trim": true
+        }
+      ],
+      "text_spacing": "{{vh(0.12)}}",
+      "height": "{{vh(0.50)}}",
+      "color": "(255,255,255,255)",
+      "processor_name": "multi_rich_text"
+    },
+    "logo_bottom": {
       "processor_name": "rich_text",
-      "text": "{{ (exif.DateTimeOriginal or exif.CreateDate or exif.DigitalCreationDate or exif.DateCreated or exif.DateTimeCreated or exif.DigitalCreationDateTime|default(''))[:10] | replace(':', '-') }} ©{{ (exif.DateTimeOriginal or exif.CreateDate or exif.DigitalCreationDate or exif.DateCreated or exif.DateTimeCreated or exif.DigitalCreationDateTime | default(str(datetime.datetime.now().year)))[:4] }} ALsW",
+      "text": "©{{ ((exif.DateTimeOriginal or exif.CreateDate or exif.DigitalCreationDate or exif.DateCreated or exif.DateTimeCreated or exif.DigitalCreationDateTime)|default('2026'))[:4] }} ALsW",
       "font_path": "AlibabaPuHuiTi-2-45-Light.otf",
-      "is_bold": true,
-      "height": "{{vh(0.40)}}",
+      "is_bold": false,
+      "trim": true,
+      "height": "{{vh(0.15)}}",
       "color": "(255,255,255,255)"
     },
-  
-    "left_logo": "{{auto_logo('my') |replace('\\', '/')}}",
+    "logo_bottom_position": "br",
+    "logo_bottom_inset": 0.02,
+    "left_logo": "{{auto_logo('my')|replace('\\', '/')}}",
+    "left_logo_height": "{{vh(1.15)}}",
     "delimiter_color": "(255,255,255,255)",
-    "delimiter_width": "{{vh(0.05)}}",
+    "delimiter_width": 2,
     "auto_color": true,
-    "opacity": 130,
+    "busy_opacity_boost": false,
+    "opacity": 100,
+    "stroke_width": "{{0}}",
+    "stroke_opacity": 60,
+    "stroke_color": "auto",
     "processor_name": "watermark"
   }
 ]
