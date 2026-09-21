@@ -41,6 +41,7 @@
       "color": "(255,255,255,255)"
     },
     "logo_bottom_position": "br",
+    "logo_bottom_ratio": 0.13,
     "logo_bottom_inset": 0.02,
     "left_logo": "{{auto_logo('my')|replace('\\', '/')}}",
     "left_logo_height": "{{vh(0.75)}}",

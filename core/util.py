@@ -271,12 +271,15 @@ def preserve_exif(src_path: str | Path, dst_path: str | Path, exif: dict | None 
     try:
         # 非法 DateTimeOriginal（毫秒串）无法拷贝，后面按解析结果补写
         # -xmp：按块复制 XMP（保留 GCamera MotionPhoto 等未在 tag 库中定义的字段）
+        # -Orientation#=1：输出像素已由 ImageOps.exif_transpose 转正，
+        # 若继续沿用源文件的 Orientation（如竖屏照片的 8），观看端会二次旋转
         subprocess.run(
             [
                 str(EXIFTOOL_PATH),
                 '-TagsFromFile', str(src_path),
                 '-all:all',
                 '-xmp',
+                '-Orientation#=1',
                 '-overwrite_original',
                 '-q',
                 '-m',
@@ -542,9 +545,13 @@ def preserve_motion_photo(
 def _get_ffmpeg_exe() -> str | None:
     try:
         import imageio_ffmpeg
-        return imageio_ffmpeg.get_ffmpeg_exe()
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe:
+            return exe
     except Exception:
-        return None
+        pass
+    # 兜底：系统 PATH 中已安装的 ffmpeg
+    return shutil.which("ffmpeg")
 
 
 def _probe_video_size(ffmpeg: str, video_path: Path) -> tuple[int, int] | None:

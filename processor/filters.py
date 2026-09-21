@@ -247,6 +247,9 @@ class MarginWithRatioFilter(FilterProcessor):
 
 
 class WatermarkFilter(FilterProcessor):
+    # 版权标识烘焙进 logo 时的基准分辨率下限（px），与图片尺寸无关
+    LOGO_BAKE_MIN_HEIGHT = 1024
+
     @staticmethod
     def _as_bool(value, default: bool = False) -> bool:
         """
@@ -504,6 +507,39 @@ class WatermarkFilter(FilterProcessor):
             cfg["height"] = default_text_height
         return start_process([cfg])
 
+    def _render_text_slot_at_height(self, cfg, height: int):
+        """
+        按指定像素高度渲染文字槽，用于在烘焙分辨率下重绘版权标识。
+        低分辨率下渲染再放大会让字形与宽度失真，故单独重绘一次。
+        :param cfg: 文字槽配置（dict 或 list）
+        :param height: 目标高度（px）
+        :return: 渲染后的图层
+        """
+        if not cfg:
+            return self._empty_image()
+        nodes = copy.deepcopy(cfg) if isinstance(cfg, list) else [copy.deepcopy(cfg)]
+        for node in nodes:
+            if isinstance(node, dict) and node.get("processor_name") in ("rich_text", "multi_rich_text"):
+                node["height"] = int(height)
+        return start_process(nodes)
+
+    @staticmethod
+    def _logo_bottom_ratio(ctx: PipelineContext, logo_bottom: Image.Image, logo_target_h: int) -> float:
+        """
+        版权标识相对 logo 的高度比例。
+        优先取模板的 logo_bottom_ratio（固定值，与图片尺寸无关）；
+        未配置时按已渲染高度推算（旧行为，小图取整会漂移）。
+        """
+        raw = ctx.get("logo_bottom_ratio")
+        if raw not in (None, ""):
+            try:
+                ratio = float(raw)
+            except (TypeError, ValueError):
+                ratio = 0.0
+            if ratio > 0:
+                return max(0.02, min(0.6, ratio))
+        return float(logo_bottom.height) / max(float(logo_target_h), 1.0)
+
     def process(self, ctx: PipelineContext):
         img = ctx.get_buffer()[0]
         if img.mode != 'RGBA':
@@ -630,12 +666,17 @@ class WatermarkFilter(FilterProcessor):
             # 先裁透明边再按目标高度缩放，避免空白计入高度
             left_logo = self._trim_alpha(left_logo)
             if overlay_logo_bottom and logo_bottom.height > 0:
-                # 版权先按比例烙到 logo 上再整体缩放，避免小图字宽/字号漂移
-                logo_bottom = self._trim_alpha_horizontal(logo_bottom)
+                # 版权按固定比例在烘焙分辨率下重绘后烙到 logo 右下角，之后只整体缩放，
+                # 使两者的相对大小与间距不随图片尺寸变化
                 inset_frac = self._parse_logo_bottom_inset(ctx.get("logo_bottom_inset"))
-                copy_ratio = float(logo_bottom.height) / max(float(logo_target_h), 1.0)
+                copy_ratio = self._logo_bottom_ratio(ctx, logo_bottom, logo_target_h)
+                bake_h = max(int(logo_target_h) * 8, self.LOGO_BAKE_MIN_HEIGHT)
+                logo_bottom_hi = self._trim_alpha_horizontal(self._render_text_slot_at_height(
+                    self._scale_text_cfg(ctx.get("logo_bottom"), scale),
+                    max(1, int(round(bake_h * copy_ratio))),
+                ))
                 left_logo = self._bake_logo_bottom_br(
-                    left_logo, logo_bottom, max(1, logo_target_h), copy_ratio, inset_frac
+                    left_logo, logo_bottom_hi, max(1, logo_target_h), copy_ratio, inset_frac, bake_h
                 )
                 logo_bottom = Image.new("RGBA", (0, 0), (0, 0, 0, 0))
             else:
@@ -929,20 +970,21 @@ class WatermarkFilter(FilterProcessor):
         target_logo_h: int,
         copy_ratio: float,
         inset_frac: float,
+        work_h: int = None,
     ) -> Image.Image:
         """
-        在高分辨率下把版权烙到 logo 右下角，再缩到目标高度。
-        这样每张图相对 logo 的位置/比例一致，不受小图像素取整影响。
+        在固定高分辨率下把版权烙到 logo 右下角，再整体缩到目标高度。
+        copy_ratio 固定了版权相对 logo 的高度比例，work_h 固定了烘焙基准分辨率，
+        因此不同尺寸的图片得到的大小比例与间距完全一致。
         """
         if logo is None or logo.width == 0 or logo.height == 0:
             return logo
         if copyright_img is None or copyright_img.width == 0 or copyright_img.height == 0:
             return cls._resize_keep_ratio(logo, target_logo_h)
 
-        copy_ratio = max(0.02, min(0.6, float(copy_ratio) if copy_ratio > 0 else 0.13))
-        work_h = max(int(target_logo_h) * 8, 512)
+        work_h = int(work_h) if work_h else max(int(target_logo_h) * 8, cls.LOGO_BAKE_MIN_HEIGHT)
         work_logo = cls._resize_keep_ratio(logo, work_h)
-        work_copy_h = max(1, int(round(work_h * copy_ratio)))
+        work_copy_h = max(1, int(round(work_h * float(copy_ratio))))
         work_copy = cls._resize_keep_ratio(copyright_img.convert("RGBA"), work_copy_h)
 
         pad = max(1, int(round(min(work_logo.width, work_logo.height) * inset_frac)))

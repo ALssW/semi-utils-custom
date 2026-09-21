@@ -281,6 +281,15 @@ class MultiRichTextGenerator(Generator):
             img = img.convert('RGBA')
         return img.getchannel('A').getbbox()
 
+    @staticmethod
+    def _font_family(font_path: str) -> str:
+        """取字体族名，用于区分「同族不同字重」与「不同字体」。"""
+        try:
+            name = load_font(font_path, 32).getname()
+        except Exception:
+            return font_path or ''
+        return (name[0] if name else '') or (font_path or '')
+
     def process(self, ctx: PipelineContext):
         """
         将多段富文本按同一基线拼接后缩放到目标高度。
@@ -293,69 +302,79 @@ class MultiRichTextGenerator(Generator):
 
         # 1) 各段按基线绘制
         font_px = _font_size_for_target(height)
-        raw_parts: List[tuple] = []  # (image, font_path)
+        raw_parts: List[tuple] = []  # (image, font_path, ascent)
         for segment in text_segments:
             if not segment.text:
                 continue
-            img, _ = RichTextGenerator.render_on_baseline(segment, font_px)
+            img, ascent = RichTextGenerator.render_on_baseline(segment, font_px)
             if img.width == 0 or img.height == 0:
                 continue
-            raw_parts.append((img, segment.font_path or ''))
+            raw_parts.append((img, segment.font_path or '', ascent))
 
         if not raw_parts:
             ctx.update_buffer([Image.new('RGBA', (0, 0), (0, 0, 0, 0))]).success()
             return
 
         ref_font = raw_parts[0][1]
+        ref_family = self._font_family(ref_font)
 
         # 2) 以首段墨迹高度为字帽高参考，统一各段视觉高度（解决 ℤ 等符号字体偏大）
+        #    同字族仅字重不同时，字号与字面高度天然一致，不做缩放，避免被
+        #    下划线、斜杠等个别字形拉高/拉低墨迹而误判为「字体偏大」。
         ref_box = self._ink_bbox(raw_parts[0][0])
         ref_ink_h = (ref_box[3] - ref_box[1]) if ref_box else raw_parts[0][0].height
 
-        unified: List[tuple] = []  # (image, font_path)
-        for img, font_path in raw_parts:
+        unified: List[tuple] = []  # (image, font_path, ascent)
+        for img, font_path, ascent in raw_parts:
             box = self._ink_bbox(img)
-            if not box or ref_ink_h <= 0:
-                unified.append((img, font_path))
+            if self._font_family(font_path) == ref_family or not box or ref_ink_h <= 0:
+                unified.append((img, font_path, ascent))
                 continue
             ink_h = box[3] - box[1]
             if ink_h <= 0:
-                unified.append((img, font_path))
+                unified.append((img, font_path, ascent))
                 continue
             if abs(ink_h - ref_ink_h) > max(2, ref_ink_h * 0.03):
                 scale = ref_ink_h / ink_h
                 new_w = max(1, int(round(img.width * scale)))
                 new_h = max(1, int(round(img.height * scale)))
                 img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-            unified.append((img, font_path))
+                ascent *= scale
+            unified.append((img, font_path, ascent))
 
-        # 3) 按墨迹底边对齐（大写字母视觉基线）
+        # 3) 对齐：同字族按基线对齐（视觉居中一致）；异字族按墨迹底边对齐
         ink_boxes = []
-        for img, _ in unified:
+        for img, _, _ in unified:
             box = self._ink_bbox(img)
             ink_boxes.append(box if box else (0, 0, img.width, img.height))
 
-        max_below = max(img.height - box[3] for (img, _), box in zip(unified, ink_boxes))
         max_above = max(box[3] for box in ink_boxes)
         optical_pad = max(2, ref_ink_h // 16)
-        canvas_h = max_above + max_below + optical_pad
+        ref_baseline = unified[0][2]
+
+        ys = []
+        for (img, font_path, ascent), box in zip(unified, ink_boxes):
+            if self._font_family(font_path) == ref_family:
+                ys.append(ref_baseline - ascent)
+            else:
+                # 符号字体相对正文字体做轻微上移，抵消双线字母的视觉下沉
+                y = max_above - box[3]
+                ys.append(y - max(1, int(round(ref_ink_h * 0.08))))
+
+        offset = max(0.0, -min(ys))
+        canvas_h = int(round(max(y + img.height for y, (img, _, _) in zip(ys, unified))
+                             + offset + optical_pad))
 
         spacing_base = 0
         if text_spacing and height > 0:
             spacing_base = max(0, int(round(text_spacing * canvas_h / height)))
 
-        total_w = sum(img.width for img, _ in unified) + spacing_base * (len(unified) - 1)
+        total_w = sum(img.width for img, _, _ in unified) + spacing_base * (len(unified) - 1)
         canvas = Image.new('RGBA', (max(1, total_w), max(1, canvas_h)), (0, 0, 0, 0))
 
-        ink_bottom_y = max_above
-        ref_ink_h_final = ink_boxes[0][3] - ink_boxes[0][1]
         x = 0
-        for (img, font_path), box in zip(unified, ink_boxes):
-            y = ink_bottom_y - box[3]
-            # 符号字体相对正文字体做轻微上移，抵消双线字母的视觉下沉
-            if font_path != ref_font:
-                y -= max(1, int(round(ref_ink_h_final * 0.08)))
-            canvas.paste(img, (x, max(0, y)), img)
+        for (img, _, _), y in zip(unified, ys):
+            canvas.paste(img, (x, max(0, int(round(y + offset)))), img)
             x += img.width + spacing_base
 
         # 4) 整体缩放

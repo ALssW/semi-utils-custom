@@ -1,7 +1,7 @@
 [
   {
     "overlay": true,
-    "scale": 1,
+    "scale": 1.5,
     "min_text_px": 26,
     "block_align": "left",
     "text_height": "{{vh(0.34)}}",
@@ -18,8 +18,16 @@
           "font_path": "AlibabaPuHuiTi-2-85-Bold.otf",
           "is_bold": true,
           "trim": true
+        },
+        {
+          "text": "©{{ ((exif.DateTimeOriginal or exif.CreateDate or exif.DigitalCreationDate or exif.DateCreated or exif.DateTimeCreated or exif.DigitalCreationDateTime)|default('2026'))[:4] }} ALsW",
+          "color": "white",
+          "font_path": "AlibabaPuHuiTi-2-45-Light.otf",
+          "is_bold": false,
+          "trim": true
         }
       ],
+      "text_spacing": "{{vh(0.12)}}",
       "height": "{{vh(0.55)}}",
       "color": "(255,255,255,255)",
       "processor_name": "multi_rich_text"
@@ -41,8 +49,8 @@
           "trim": true
         }
       ],
-      "text_spacing": "{{vh(0.12)}}",
-      "height": "{{vh(0.50)}}",
+      "text_spacing": "{{vh(0.08)}}",
+      "height": "{{vh(0.40)}}",
       "color": "(255,255,255,255)",
       "processor_name": "multi_rich_text"
     },
@@ -52,18 +60,19 @@
       "font_path": "AlibabaPuHuiTi-2-45-Light.otf",
       "is_bold": false,
       "trim": true,
-      "height": "{{vh(0.15)}}",
-      "color": "(255,255,255,255)"
+      "height": "{{vh(0)}}",
+      "color": "(255,255,255,0)"
     },
     "logo_bottom_position": "br",
-    "logo_bottom_inset": 0.02,
+    "logo_bottom_ratio": 0,
+    "logo_bottom_inset": 0,
     "left_logo": "{{auto_logo('my')|replace('\\', '/')}}",
-    "left_logo_height": "{{vh(1.15)}}",
+    "left_logo_height": "{{vh(1.25)}}",
     "delimiter_color": "(255,255,255,255)",
     "delimiter_width": 2,
     "auto_color": true,
     "busy_opacity_boost": false,
-    "opacity": 100,
+    "opacity": 180,
     "stroke_width": "{{0}}",
     "stroke_opacity": 60,
     "stroke_color": "auto",
